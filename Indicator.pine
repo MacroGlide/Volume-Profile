@@ -1,0 +1,236 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © MacroGlide
+
+//@version=5
+indicator('Volume Profile', overlay=true)
+
+// Input parameters
+bbars = input.int(title='Number of Bars', defval=150)
+cnum = input.int(title='Row Size', defval=24)
+volume_type = input.string(defval='Up/Down', title='Volume', options=['Up/Down', 'Total', 'Delta'])
+percent = input.float(70., title='Value Area Volume %')
+
+// General settings
+placement = input.string(defval='Right', title='Placement', options=['Left', 'Right'], group='General')
+bg_color = input(defval=color.new(color.gray, 90), title='Background', group='General')
+shift = input.int(title='Shift', defval=0, group='General')
+
+// Volume profile settings
+vup_color = input(defval=color.new(color.green, 30), title='Value Area Up', group='Volume Profile') 
+vdown_color = input(defval=color.new(color.red, 30), title='Value Area Down', group='Volume Profile')
+up_color = input(defval=color.new(color.green, 75), title='UP Volume', group='Volume Profile')
+down_color = input(defval=color.new(color.red, 75), title='Down Volume', group='Volume Profile')
+total_vol_color = input(defval=color.new(color.gray, 60), title='Total Volume', group='Volume Profile')
+
+// Point of control (POC) settings
+show_poc = input.bool(defval = true, title = "Show Total POC Line", group='POC')
+poc_color = input.color(defval=color.new(color.blue, 0), title='Total POC Color', group='POC')
+poc_width = input.int(defval=1, title='Total POC Width', group='POC')
+
+show_bull_poc = input.bool(defval = false, title = "Show Bullish POC Line", group='Bullish POC')
+bull_poc_color = input.color(defval=color.new(color.green, 60), title='Bullish POC Color', group='Bullish POC')
+bull_poc_width = input.int(defval=1, title='Bullish POC Width', group='Bullish POC')
+
+show_bear_poc = input.bool(defval = false, title = "Show Bearish POC Line", group='Bearish POC')
+bear_poc_color = input.color(defval=color.new(color.red, 60), title='Bearish POC Color', group='Bearish POC')
+bear_poc_width = input.int(defval=1, title='Bearish POC Width', group='Bearish POC')
+
+// Text label settings
+show_labels = input.bool(defval=true, title="Show Volume Values", group='Values')
+display_mode = input.string(defval='Percentage', title='Display Mode', options=['Percentage', 'Real Values'], group='Values')
+label_text_color = input.color(defval=color.new(color.white, 30), title='Label Text Color', group='Values')
+label_style = input.string(defval='None', title='Label Shape', options=['None', 'Label Left', 'Label Right'], group='Values')
+label_bg_color = input.color(defval=color.new(color.black, 0), title='Label Background Color', group='Values')
+
+// Fixed 1-minute timeframe for volume calculation
+fixedLowerTimeframe = "1"
+
+// Function to calculate up and down volumes
+upAndDownVolume() =>
+    [volume[open >= close ? 1 : 0], volume[open < close ? 1 : 0]]
+
+[upVolumeArray, downVolumeArray] = request.security_lower_tf(syminfo.tickerid, fixedLowerTimeframe, upAndDownVolume())
+
+// Calculate top and bottom price levels
+top = ta.highest(bbars)
+bot = ta.lowest(bbars)
+dist = (top - bot) / 500
+step = (top - bot) / cnum
+
+// Initialize levels array
+levels = array.new_float(cnum + 1)
+for x = 0 to cnum by 1
+    array.set(levels, x, bot + step * x)
+
+// Function to get the volume intersection
+get_vol(y11, y12, y21, y22, height, vol) =>
+    nz(math.max(math.min(math.max(y11, y12), math.max(y21, y22)) - math.max(math.min(y11, y12), math.min(y21, y22)), 0) * vol / height)
+
+// Main calculation if it's the last bar
+if barstate.islast
+    // Calculate volume for each channel and candle
+    volumes = array.new_float(cnum * 2, 0.)
+    for bars = 0 to bbars - 1 by 1
+        body_top = math.max(close[bars], open[bars])
+        body_bot = math.min(close[bars], open[bars])
+        itsgreen = close[bars] >= open[bars]
+
+        topwick = high[bars] - body_top
+        bottomwick = body_bot - low[bars]
+        body = body_top - body_bot
+
+        bodyvol = body * volume[bars] / (2 * topwick + 2 * bottomwick + body)
+        topwickvol = 2 * topwick * volume[bars] / (2 * topwick + 2 * bottomwick + body)
+        bottomwickvol = 2 * bottomwick * volume[bars] / (2 * topwick + 2 * bottomwick + body)
+        for x = 0 to cnum - 1 by 1
+            array.set(volumes, x, array.get(volumes, x) + (itsgreen ? get_vol(array.get(levels, x), array.get(levels, x + 1), body_bot, body_top, body, bodyvol) : 0) + get_vol(array.get(levels, x), array.get(levels, x + 1), body_top, high[bars], topwick, topwickvol) / 2 + get_vol(array.get(levels, x), array.get(levels, x + 1), body_bot, low[bars], bottomwick, bottomwickvol) / 2)
+            array.set(volumes, x + cnum, array.get(volumes, x + cnum) + (itsgreen ? 0 : get_vol(array.get(levels, x), array.get(levels, x + 1), body_bot, body_top, body, bodyvol)) + get_vol(array.get(levels, x), array.get(levels, x + 1), body_top, high[bars], topwick, topwickvol) / 2 + get_vol(array.get(levels, x), array.get(levels, x + 1), body_bot, low[bars], bottomwick, bottomwickvol) / 2)
+
+    // Sum total volumes
+    totalvols = array.new_float(cnum, 0.)
+    for x = 0 to cnum - 1 by 1
+        array.set(totalvols, x, array.get(volumes, x) + array.get(volumes, x + cnum))
+
+    // Calculate point of control (POC)
+    int poc = array.indexof(totalvols, array.max(totalvols))
+
+    // Calculate value area
+    totalmax = array.sum(totalvols) * percent / 100.
+    va_total = array.get(totalvols, poc)
+    int up = poc
+    int down = poc
+    for x = 0 to cnum - 1 by 1
+        if va_total >= totalmax
+            break
+        uppervol = up < cnum - 1 ? array.get(totalvols, up + 1) : 0.
+        lowervol = down > 0 ? array.get(totalvols, down - 1) : 0.
+        if uppervol == 0 and lowervol == 0
+            break
+        if uppervol >= lowervol
+            va_total += uppervol
+            up += 1
+        else
+            va_total += lowervol
+            down -= 1
+
+    maxvol = array.max(totalvols)
+    for x = 0 to cnum * 2 - 1 by 1
+        array.set(volumes, x, array.get(volumes, x) * bbars / (3 * maxvol))
+
+    // Draw volume profile rows
+    var vol_bars = array.new_box(cnum * 2, na)
+    for x = 0 to cnum - 1 by 1
+        box.delete(array.get(vol_bars, x))
+        box.delete(array.get(vol_bars, x + cnum))
+        bull_vol = array.get(volumes, x)
+        bear_vol = array.get(volumes, x + cnum)
+        total_vol = bull_vol + bear_vol
+        bull_percent = total_vol != 0 ? (bull_vol / total_vol) * 100 : 0
+        bear_percent = total_vol != 0 ? (bear_vol / total_vol) * 100 : 0
+
+        display_text = display_mode == 'Percentage' ? str.tostring(bull_percent, '0.0') + '% / ' + str.tostring(bear_percent, '0.0') + '%' : str.tostring(bull_vol, '0') + ' / ' + str.tostring(bear_vol, '0')
+
+        if placement == 'Left'
+            array.set(vol_bars, x, box.new(bar_index - bbars + 1 + shift, 
+                                           array.get(levels, x + 1) - dist, 
+                                           bar_index - bbars + 1 + shift + math.round(array.get(volumes, x)), 
+                                           array.get(levels, x) + dist, 
+                                           border_width=0, 
+                                           bgcolor=(volume_type == 'Up/Down' or volume_type == 'Delta') and x >= down and x <= up ? vup_color : up_color))
+            array.set(vol_bars, x + cnum, box.new(bar_index - bbars + 1 + shift + math.round(array.get(volumes, x)), 
+                                                  array.get(levels, x + 1) - dist, 
+                                                  bar_index - bbars + 1 + shift + math.round(array.get(volumes, x)) + math.round(array.get(volumes, x + cnum)), 
+                                                  array.get(levels, x) + dist, 
+                                                  border_width=0, 
+                                                  bgcolor=(volume_type == 'Up/Down' or volume_type == 'Delta') and x >= down and x <= up ? vdown_color : down_color))
+
+            if show_labels
+                label_shape = label.style_none
+                if label_style == 'Label Left'
+                    label_shape := label.style_label_left
+                else if label_style == 'Label Right'
+                    label_shape := label.style_label_right
+
+                if label_style != 'None'
+                    label.new(bar_index - bbars - 2 + shift - 6, (array.get(levels, x) + array.get(levels, x + 1)) / 2 - dist,
+                              text = display_text,
+                              xloc = xloc.bar_index, yloc = yloc.price, textcolor = label_text_color, size = size.small, style = label_shape, color = label_bg_color)
+                else
+                    label.new(bar_index - bbars - 3 + shift - 6, (array.get(levels, x) + array.get(levels, x + 1)) / 2 - dist * 2.5,
+                              text = display_text,
+                              xloc = xloc.bar_index, yloc = yloc.price, textcolor = label_text_color, size = size.small, style = label.style_none)
+        else
+            if volume_type == 'Up/Down'
+                array.set(vol_bars, x, box.new(bar_index + shift, 
+                                               array.get(levels, x + 1) - dist, 
+                                               bar_index - math.round(array.get(volumes, x)) + shift, 
+                                               array.get(levels, x) + dist, 
+                                               border_width=0, 
+                                               bgcolor=x >= down and x <= up ? vup_color : up_color))
+                array.set(vol_bars, x + cnum, box.new(bar_index - math.round(array.get(volumes, x)) + shift, 
+                                                      array.get(levels, x + 1) - dist, 
+                                                      bar_index - math.round(array.get(volumes, x)) - math.round(array.get(volumes, x + cnum)) + shift, 
+                                                      array.get(levels, x) + dist, 
+                                                      border_width=0, 
+                                                      bgcolor=x >= down and x <= up ? vdown_color : down_color))
+            else if volume_type == 'Total'
+                total_volume = array.get(volumes, x) + array.get(volumes, x + cnum)
+                array.set(vol_bars, x, box.new(bar_index + shift, 
+                                               array.get(levels, x + 1) - dist, 
+                                               bar_index - math.round(total_volume) + shift, 
+                                               array.get(levels, x) + dist, 
+                                               border_width=0, 
+                                               bgcolor=total_vol_color))
+            else if volume_type == 'Delta'
+                delta_vol = array.get(volumes, x) - array.get(volumes, x + cnum)
+                array.set(vol_bars, x, box.new(bar_index + shift, 
+                                               array.get(levels, x + 1) - dist, 
+                                               bar_index - math.round(math.abs(delta_vol)) + shift, 
+                                               array.get(levels, x) + dist, 
+                                               border_width=0, 
+                                               bgcolor=delta_vol >= 0 ? color.new(color.green, 50) : color.new(color.red, 50)))
+
+            if show_labels
+                label_shape = label.style_none
+                if label_style == 'Label Left'
+                    label_shape := label.style_label_left
+                else if label_style == 'Label Right'
+                    label_shape := label.style_label_right
+
+                if label_style != 'None'
+                    label.new(bar_index + 1 + shift + 6, (array.get(levels, x) + array.get(levels, x + 1)) / 2 - dist,
+                              text = display_text,
+                              xloc = xloc.bar_index, yloc = yloc.price, textcolor = label_text_color, size = size.small, style = label_shape, color = label_bg_color)
+                else
+                    label.new(bar_index + 2 + shift + 6, (array.get(levels, x) + array.get(levels, x + 1)) / 2 - dist * 2.5,
+                              text = display_text,
+                              xloc = xloc.bar_index, yloc = yloc.price, textcolor = label_text_color, size = size.small, style = label.style_none)
+
+    // Draw POC line
+    poc_level = (array.get(levels, poc) + array.get(levels, poc + 1)) / 2
+    var line poc_line = na
+    if show_poc
+        line.delete(poc_line)
+        poc_line := line.new(bar_index - bbars + 1, poc_level, bar_index, poc_level, color=poc_color, width=poc_width)
+
+    // Draw Bullish POC line
+    int bull_poc = array.indexof(array.slice(volumes, 0, cnum), array.max(array.slice(volumes, 0, cnum)))
+    bull_poc_level = (array.get(levels, bull_poc) + array.get(levels, bull_poc + 1)) / 2
+    var line bull_poc_line = na
+    if show_bull_poc
+        line.delete(bull_poc_line)
+        bull_poc_line := line.new(bar_index - bbars + 1, bull_poc_level, bar_index, bull_poc_level, color=bull_poc_color, width=bull_poc_width)
+
+    // Draw Bearish POC line
+    int bear_poc = array.indexof(array.slice(volumes, cnum, cnum * 2), array.max(array.slice(volumes, cnum, cnum * 2)))
+    bear_poc_level = (array.get(levels, bear_poc) + array.get(levels, bear_poc + 1)) / 2
+    var line bear_poc_line = na
+    if show_bear_poc
+        line.delete(bear_poc_line)
+        bear_poc_line := line.new(bar_index - bbars + 1, bear_poc_level, bar_index, bear_poc_level, color=bear_poc_color, width=bear_poc_width)
+
+    // Draw background
+    var box bg_box = na
+    box.delete(bg_box)
+    bg_box := box.new(bar_index - bbars + 1, top, bar_index, bot, border_width=0, bgcolor=bg_color)
+
